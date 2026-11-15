@@ -1,0 +1,443 @@
+# Crew health playbook for Vital Orbit Pulse.
+# All domain logic lives here. The engine knows nothing about health.
+# Thresholds are illustrative values tuned for the simulator. They are not clinical guidance.
+
+name: crew-health
+version: 10
+title: Crew health, long-duration mission
+
+# Lowest to highest. "In range" is the absence of any of these.
+severities:
+  - { id: watch, label: Watch }
+  - { id: act, label: Act now }
+
+baseline:
+  samples: 20 # readings used to learn a personal baseline
+  trend_alpha: 0.1 # smoothing for the slow trend used by chronic rules
+
+# Lets the dashboards turn a forecast date into "mission day 212".
+mission:
+  start: "2024-05-01T00:00:00Z"
+
+# Crew radiation dose is modeled from NASA DONKI space weather events. It is not a measurement.
+# Each solar energetic particle event adds a decaying burst, scaled by the strongest flare DONKI
+# links to it. Each CME whose cone covers Mars adds a bump when its front arrives.
+space_weather:
+  dose_rate: { domain: radiation, metric: dose_rate }
+  cumulative_dose: { domain: radiation, metric: cumulative_dose }
+  model:
+    quiet_rate: 0.65 # mSv/day
+    sep_peak: 3 # mSv/day for an event linked to an X1 flare
+    unlinked_flare_factor: 0.5
+    sep_decay_hours: 12
+    shock_peak: 4 # mSv/day for a 1000 km/s CME front
+    shock_hours: 6
+
+# The digital twin: a smoothed level and slope per indicator, used by forecast rules.
+twin:
+  horizon_fraction: 0.05 # smooth over 5% of each rule's horizon: minutes for cabin air, days for mission dose
+  min_samples: 5
+
+domains:
+  cardiovascular:
+    label: Heart and circulation
+    indicators:
+      heart_rate: { label: Heart rate, unit: bpm }
+      hrv: { label: Heart rate variability, unit: ms }
+      blood_pressure_systolic: { label: "Blood pressure, upper", unit: mmHg }
+      blood_pressure_diastolic: { label: "Blood pressure, lower", unit: mmHg }
+  environment:
+    label: Cabin air
+    indicators:
+      co2: { label: Carbon dioxide, unit: mmHg, privacy: always_shared }
+      o2: { label: Oxygen, unit: "%", privacy: always_shared }
+      air_quality_pm25: { label: Fine particles, unit: µg/m³, privacy: always_shared }
+  radiation:
+    label: Radiation
+    indicators:
+      dose_rate:
+        label: Dose rate
+        unit: mSv/day
+        note: Modeled from DONKI events (NASA CCMC DONKI)
+        privacy: always_shared
+      cumulative_dose:
+        label: Mission dose so far
+        unit: mSv
+        note: Modeled from DONKI events (NASA CCMC DONKI)
+        baseline: false
+  immune:
+    label: Immune
+    indicators:
+      body_temperature: { label: Body temperature, unit: °C }
+  bone:
+    label: Bone health
+    indicators:
+      bone_density: { label: Bone density, unit: "% of baseline", baseline_samples: 3 }
+      exercise_minutes: { label: Exercise today, unit: min, baseline_samples: 3 }
+  behavioral:
+    label: Mind and sleep
+    indicators:
+      mood: { label: Mood, unit: 1-5, privacy: private, baseline_samples: 3 }
+      sleep_hours: { label: Sleep last night, unit: h, privacy: private, baseline_samples: 3 }
+      reaction_time: { label: Reaction time, unit: ms, privacy: private, baseline_samples: 3 }
+
+checklists:
+  heart_elevated:
+    title: Heart rate is high
+    steps:
+      - Stop what you are doing and sit or strap in.
+      - Breathe slowly for two minutes, in for four seconds and out for six.
+      - Check the reading again.
+      - If it is still high after five minutes, or you feel chest pain or faint, call the crew medical officer now.
+  air_co2:
+    title: Carbon dioxide is building up
+    steps:
+      - Tell everyone in this module.
+      - Check that the air scrubber fan is running and the vents are clear.
+      - Move to another module if you have a headache or feel short of breath.
+      - Check the reading again in ten minutes.
+  air_o2:
+    title: Oxygen is low
+    steps:
+      - Put on a portable breathing mask now.
+      - Tell everyone in this module and leave it together.
+      - Close the hatch behind you.
+      - Report the reading to the commander.
+  fever:
+    title: Body temperature is high
+    steps:
+      - Rest and drink water.
+      - Take your temperature again in 30 minutes with the handheld thermometer.
+      - Note any other symptoms in your daily check-in.
+      - Keep your distance from other crew until the medical officer has reviewed this.
+  radiation_shelter:
+    title: Radiation is rising fast
+    steps:
+      - Go to the shielded lab now.
+      - Tell the rest of the crew to do the same.
+      - Stay there until the dose rate is back to normal.
+  bone_exercise:
+    title: Bone loading is behind plan
+    steps:
+      - Book a resistance exercise session for today.
+      - Log the session when you finish.
+      - Review your weekly exercise plan with the flight surgeon.
+  rest_and_reset:
+    title: You have had a hard few days
+    steps:
+      - Protect a full sleep period tonight. Dim the lights an hour before.
+      - Take 20 minutes today away from task work.
+      - Decide whether you want to share this with the flight surgeon. It stays private unless you do.
+
+# The assistant that explains alerts to the crew. It runs on Workers AI through AI Gateway.
+ai:
+  role: Flight surgeon assistant
+  model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+  embedding_model: "@cf/baai/bge-base-en-v1.5"
+  max_tokens: 400
+  top_k: 3
+  min_score: 0.6 # unrelated questions score about 0.55 against this guidance
+  score_margin: 0.08
+  prompt: |
+    You are the flight surgeon assistant on a crewed Mars mission. Earth is many minutes away by
+    radio, so the crew member acts first and you help them act.
+    You never diagnose. Never name a disease or medical condition as the cause of a reading, and
+    never say what the crew member has or does not have.
+    You do three things. Explain what the reading means in plain language. Guide the crew member
+    through the playbook checklist steps in order. Say when to call the crew medical officer or
+    the flight surgeon.
+    Use only the alert, reading, checklist and guidance you are given. Do not invent numbers,
+    limits, treatments or checklist steps. Quote checklist steps only from a playbook checklist
+    you were given. If none was given, do not mention a checklist. If the material does not cover the question, say so in one sentence and
+    tell the crew member to ask the flight surgeon.
+    If the crew member asks for a diagnosis, decline in one sentence and say who can assess them.
+    Write at most 120 words, in short plain sentences. Calm and direct. No headings.
+
+# Guidance the assistant retrieves from Vectorize. Illustrative text written for this demo.
+# It is not clinical guidance. Replace it with the mission's own medical documentation.
+knowledge:
+  - id: heart-rate
+    title: Reading a raised heart rate
+    text: >
+      Heart rate rises with exercise, stress, heat, dehydration and poor sleep. A reading far above
+      a crew member's own usual range while resting is a reason to stop, sit or strap in, and
+      breathe slowly. Check the reading again after a few minutes of rest. Chest pain, feeling
+      faint, or a rate that stays high after rest is a reason to call the crew medical officer at
+      once. A single high reading during exercise is expected.
+  - id: carbon-dioxide
+    title: Carbon dioxide in a closed cabin
+    text: >
+      Carbon dioxide builds up when air scrubbing or air mixing falls behind the crew's breathing.
+      Raised levels can cause headache, shortness of breath, sleepiness and trouble concentrating.
+      Everyone in the same module breathes the same air, so tell the others. Check the scrubber fan
+      and clear the vents. Moving to another module is the fastest relief. A rising trend matters
+      as much as the current value, because it shows the scrubbing is not keeping up.
+  - id: oxygen
+    title: Low oxygen in a module
+    text: >
+      Low oxygen impairs judgment before a person notices it, so act on the reading and not on how
+      you feel. Put on a portable breathing mask first, then leave the module together and close
+      the hatch. Report the reading to the commander. Do not go back in alone.
+  - id: body-temperature
+    title: Raised body temperature
+    text: >
+      Body temperature varies through the day and rises with exercise. A reading that stays raised
+      at rest should be checked again with the handheld thermometer after 30 minutes. Rest, drink
+      water, and note any other symptoms in the daily check-in. In a closed habitat, keep your
+      distance from other crew until the medical officer has reviewed it. Only the medical officer
+      or flight surgeon can say what is causing it.
+  - id: radiation
+    title: Radiation dose and solar particle events
+    text: >
+      Crew dose has a steady background part and bursts from solar particle events. During a burst
+      the dose rate can rise many times over. The shielded lab cuts the rate, so go there when the
+      dose rate alert fires and stay until the rate is back to normal. Mission dose only goes up.
+      The forecast shows when the mission budget would be reached at the current rate, which the
+      flight surgeon uses to plan time in shielded areas. In this app the dose is modeled from
+      NASA DONKI space weather events. It is not read from a dosimeter.
+  - id: bone-health
+    title: Bone density and exercise
+    text: >
+      Without normal gravity, bones carry less load and lose density over weeks. Resistance
+      exercise that loads the legs, hips and spine is the countermeasure, and missed sessions
+      add up. The trend over weeks matters, not one reading. If the trend is falling faster than
+      planned, book a resistance session today and review the weekly plan with the flight surgeon.
+  - id: sleep-and-mood
+    title: Sleep, mood and reaction time
+    text: >
+      Short sleep, low mood and slower reaction time often move together on long missions.
+      Protecting one full sleep period and taking time away from task work are the first steps.
+      These readings are private to the crew member unless they choose to share them. Talking to
+      the flight surgeon is the crew member's choice. A slower reaction time is a reason to avoid
+      safety-critical tasks until rested.
+
+# The daily check-in. Every answer except free text becomes a reading for its indicator.
+checkin:
+  title: Daily check-in
+  fields:
+    - id: mood
+      kind: scale
+      question: How is your mood today?
+      domain: behavioral
+      metric: mood
+      min: 1
+      max: 5
+      low_label: Very low
+      high_label: Very good
+    - id: sleep_hours
+      kind: number
+      question: How many hours did you sleep last night?
+      domain: behavioral
+      metric: sleep_hours
+      min: 0
+      max: 16
+      step: 0.5
+    - id: reaction_time
+      kind: reaction_test
+      question: Reaction time test
+      domain: behavioral
+      metric: reaction_time
+      min: 100
+      max: 2000
+    - id: symptoms
+      kind: text
+      question: Any symptoms to report? Leave this empty if you have none.
+
+rules:
+  # Heart and circulation
+  - id: heart_rate_far_above_usual
+    domain: cardiovascular
+    metric: heart_rate
+    when: { type: drift, of: value, direction: above, percent: 40 }
+    sustain: 3
+    severity: act
+    message: Your heart rate is far above your usual range.
+    actions:
+      - { do: show_checklist, checklist: heart_elevated }
+      - { do: alert_crew }
+      - { do: page_role, role: flight_surgeon }
+      - { do: log }
+  - id: hrv_below_usual
+    domain: cardiovascular
+    metric: hrv
+    when: { type: drift, of: value, direction: below, percent: 35 }
+    sustain: 3
+    severity: watch
+    message: Your heart rate variability is well below your usual range.
+    actions:
+      - { do: log }
+  - id: blood_pressure_high
+    domain: cardiovascular
+    metric: blood_pressure_systolic
+    when: { type: threshold, op: ">=", value: 130 }
+    sustain: 3
+    severity: watch
+    message: Your upper blood pressure reading is high.
+    actions:
+      - { do: log }
+
+  # Cabin air: shared environment, always shared with Earth
+  - id: co2_rising
+    domain: environment
+    metric: co2
+    when: { type: threshold, op: ">=", value: 4 }
+    sustain: 2
+    severity: watch
+    message: Carbon dioxide in your module is above the normal level.
+    actions:
+      - { do: show_checklist, checklist: air_co2 }
+      - { do: log }
+  - id: co2_forecast_high
+    domain: environment
+    metric: co2
+    when: { type: forecast, op: ">=", value: 6, horizon_hours: 0.5 }
+    sustain: 3
+    severity: watch
+    message: Carbon dioxide is rising and is on course to reach a high level within half an hour.
+    actions:
+      - { do: show_checklist, checklist: air_co2 }
+      - { do: alert_crew }
+      - { do: log }
+  - id: co2_high
+    domain: environment
+    metric: co2
+    when: { type: threshold, op: ">=", value: 6 }
+    sustain: 2
+    severity: act
+    message: Carbon dioxide in your module is high.
+    actions:
+      - { do: show_checklist, checklist: air_co2 }
+      - { do: alert_crew }
+      - { do: notify, role: commander }
+      - { do: log }
+  - id: o2_low
+    domain: environment
+    metric: o2
+    when: { type: threshold, op: "<", value: 19.5 }
+    sustain: 2
+    severity: act
+    message: Oxygen in your module is low.
+    actions:
+      - { do: show_checklist, checklist: air_o2 }
+      - { do: alert_crew }
+      - { do: page_role, role: commander }
+      - { do: log }
+
+  # Radiation
+  - id: dose_rate_high
+    domain: radiation
+    metric: dose_rate
+    when: { type: threshold, op: ">", value: 5 }
+    severity: act
+    message: Radiation dose rate is far above normal. This looks like a solar particle event.
+    actions:
+      - { do: show_checklist, checklist: radiation_shelter }
+      - { do: alert_crew }
+      - { do: page_role, role: commander }
+      - { do: log }
+  - id: mission_dose_budget_forecast
+    domain: radiation
+    metric: cumulative_dose
+    when: { type: forecast, op: ">=", value: 150, horizon_hours: 2400 }
+    sustain: 3
+    severity: watch
+    message: At this rate you pass your 150 mSv mission radiation budget within 100 days.
+    actions:
+      - { do: notify, role: flight_surgeon }
+      - { do: log }
+  - id: mission_dose_two_thirds
+    domain: radiation
+    metric: cumulative_dose
+    when: { type: threshold, op: ">=", value: 100 }
+    severity: watch
+    message: You have used two thirds of your 150 mSv mission radiation budget.
+    actions:
+      - { do: notify, role: flight_surgeon }
+      - { do: log }
+
+  # Immune
+  - id: temperature_raised
+    domain: immune
+    metric: body_temperature
+    when: { type: threshold, op: ">=", value: 37.5 }
+    sustain: 3
+    severity: watch
+    message: Your body temperature is slightly raised.
+    actions:
+      - { do: log }
+  - id: temperature_high
+    domain: immune
+    metric: body_temperature
+    when: { type: threshold, op: ">=", value: 38 }
+    sustain: 3
+    severity: act
+    message: Your body temperature is high.
+    actions:
+      - { do: show_checklist, checklist: fever }
+      - { do: page_role, role: flight_surgeon }
+      - { do: log }
+
+  # Bone health: chronic rules read the slow trend, not single readings
+  - id: bone_density_declining
+    domain: bone
+    metric: bone_density
+    when: { type: drift, of: trend, direction: below, percent: 2 }
+    severity: watch
+    message: Your bone density trend is falling faster than planned.
+    actions:
+      - { do: show_checklist, checklist: bone_exercise }
+      - { do: notify, role: flight_surgeon }
+      - { do: log }
+  - id: bone_density_forecast
+    domain: bone
+    metric: bone_density
+    when: { type: forecast, op: "<=", value: 95, horizon_hours: 1440 }
+    sustain: 2
+    severity: watch
+    message: At this rate your bone density falls 5% below your starting level within 60 days.
+    actions:
+      - { do: show_checklist, checklist: bone_exercise }
+      - { do: notify, role: flight_surgeon }
+      - { do: log }
+  - id: exercise_low
+    domain: bone
+    metric: exercise_minutes
+    when: { type: threshold, op: "<", value: 60 }
+    sustain: 3
+    severity: watch
+    message: You have logged under an hour of exercise for three days running.
+    actions:
+      - { do: show_checklist, checklist: bone_exercise }
+      - { do: log }
+
+  # Mind and sleep: private by default
+  - id: mood_low_streak
+    domain: behavioral
+    metric: mood
+    when: { type: threshold, op: "<=", value: 2 }
+    sustain: 3
+    severity: watch
+    message: Your mood has been low for three days.
+    actions:
+      - { do: show_checklist, checklist: rest_and_reset }
+      - { do: log }
+  - id: sleep_short_streak
+    domain: behavioral
+    metric: sleep_hours
+    when: { type: threshold, op: "<", value: 6 }
+    sustain: 3
+    severity: watch
+    message: You have slept under six hours for three nights.
+    actions:
+      - { do: show_checklist, checklist: rest_and_reset }
+      - { do: log }
+  - id: reaction_time_slower
+    domain: behavioral
+    metric: reaction_time
+    when: { type: drift, of: value, direction: above, percent: 15 }
+    sustain: 2
+    severity: watch
+    message: Your reaction time is slower than your usual.
+    actions:
+      - { do: show_checklist, checklist: rest_and_reset }
+      - { do: log }

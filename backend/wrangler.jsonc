@@ -1,0 +1,151 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "vital-orbit-pulse",
+	"main": "src/main.py",
+	"compatibility_date": "2026-11-13",
+	"compatibility_flags": [
+		"python_workers",
+		"python_workflows"
+	],
+	"observability": {
+		"enabled": true
+	},
+	// Frontend build output. The Worker runs first only for API and WebSocket paths.
+	"assets": {
+		"directory": "../frontend/dist",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": [
+			"/api/*",
+			"/ws/*"
+		]
+	},
+	// One Durable Object per astronaut, plus one Ledger: the single writer of the black-box log.
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "ASTRONAUT",
+				"class_name": "Astronaut"
+			},
+			{
+				"name": "LEDGER",
+				"class_name": "Ledger"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"Astronaut"
+			]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": [
+				"Ledger"
+			]
+		}
+	],
+	// No database_id: wrangler creates the database on first deploy and writes the id back here.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "vital-orbit-pulse",
+			"database_id": "3e4ac1bc-0313-4b48-9203-1f1903e5b20b"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "BUCKET",
+			"bucket_name": "vital-orbit-pulse"
+		},
+		{
+			"bucket_name": "vital-orbit-pulse",
+			"binding": "vital_orbit_pulse",
+			"remote": true
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "INDICATORS",
+				"queue": "vop-indicators"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "vop-indicators",
+				"max_batch_size": 100,
+				"max_batch_timeout": 1
+			}
+		]
+	},
+	// Incident response: one durable instance per critical alert, waits for the shelter checklist or pages.
+	"workflows": [
+		{
+			"name": "vop-incident",
+			"binding": "INCIDENT",
+			"class_name": "IncidentResponse"
+		}
+	],
+	// Tiger Data history. Python Workers have no TCP sockets for a Postgres driver, so the vop-tiger Worker (tigerdata/)
+	// talks to Tiger through Hyperdrive and this Worker calls it over RPC.
+	"services": [
+		{
+			"binding": "TIGER",
+			"service": "vop-tiger",
+			"entrypoint": "Tiger"
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	},
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "vop-guidance",
+			"remote": true
+		}
+	],
+	// Only vitalorbit.health, behind Cloudflare Access. workers.dev and preview URLs would skip the Access login.
+	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [
+		{
+			"pattern": "vitalorbit.health",
+			"custom_domain": true
+		},
+		{
+			"pattern": "guest.vitalorbit.health",
+			"custom_domain": true
+		}
+	],
+	"vars": {
+		// "default" is created by Cloudflare on the first request. Name your own gateway here to use it instead.
+		"AI_GATEWAY_ID": "default",
+		// The space weather window the cron keeps loaded, besides the current and previous month.
+		"DONKI_START": "2024-05-01",
+		"DONKI_END": "2024-05-31",
+		// Cloudflare Access (PROGRESS.md, phase 13). Not secret. Empty: every request is refused.
+		// https://<team>.cloudflareaccess.com
+		"ACCESS_TEAM_DOMAIN": "https://vitaloh.cloudflareaccess.com",
+		// Zero Trust > Access controls > Applications > Vital Orbit Pulse > Application Audience (AUD) Tag
+		"ACCESS_AUD": "3c68ecc79a85f5badeb6601c21852e8d36722cd05f6155580b04ae02a0eca22b",
+		// Auth0 application behind Access. Not secret: Sign out uses them to end the Auth0 session too.
+		"AUTH0_DOMAIN": "dev-wygz3amgcbx08jjh.us.auth0.com",
+		"AUTH0_CLIENT_ID": "y8s90b7hOjTmZgZyKkQPnFKuSXQPzlC6",
+		// Demo mode: /demo replays May 2024 DONKI for the simulated crew. Required for guests.
+		"DEMO_MODE": "1",
+		// Public hostname for judges: no Access application covers it, so no sign-in. Demo mode only.
+		"GUEST_HOST": "guest.vitalorbit.health"
+	},
+	// Every 6 hours: refresh NASA DONKI space weather events.
+	"triggers": {
+		"crons": [
+			"17 */6 * * *",
+			"0 14 * * *",
+			"0 6 * * 1"
+		]
+	}
+}

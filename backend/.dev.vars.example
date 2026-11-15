@@ -1,0 +1,14 @@
+# Copy to .dev.vars for local dev. Production: uv run pywrangler secret put <NAME>
+# Sign-in. There is no Cloudflare Access locally, so the Worker treats every local request as this user.
+# Ignored for requests from anywhere but loopback, and whenever ACCESS_AUD is set. Roles: crew, flight_surgeon, commander.
+# guest (with DEMO_MODE=1) opens the guest demo page, where the visitor picks the role.
+DEV_ROLE=commander
+# crew only: the crew member you are, for example okafor
+DEV_CREW_ID=
+# Shared key the replay script and simulator send as the X-Ingest-Key header.
+INGEST_KEY=
+# Optional. Free key from https://api.nasa.gov for DONKI space weather. Without it the keyless CCMC host is used.
+NASA_API_KEY=
+# Set to 1 to enable /demo and the black-box tamper and restore buttons. Never set it in production:
+# demo reset deletes every crew member's data and the whole black-box log.
+DEMO_MODE=

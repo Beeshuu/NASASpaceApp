@@ -1,0 +1,13 @@
+.dev.vars
+data/
+node_modules/
+.wrangler/
+.venv/
+.venv-workers/
+python_modules/
+__pycache__/
+dist/
+.claude/
+.agents/
+**/.impeccable/hook.cache.json
+**/.impeccable/live/

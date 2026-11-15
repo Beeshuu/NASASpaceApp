@@ -1,0 +1,10 @@
+{
+	"$schema": "../node_modules/wrangler/config-schema.json",
+	"name": "vop-tiger",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-11-13",
+	"compatibility_flags": ["nodejs_compat"],
+	"workers_dev": false,
+	"preview_urls": false,
+	"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "c0d7c53c41b948f4ad49ee383135be2f" }]
+}

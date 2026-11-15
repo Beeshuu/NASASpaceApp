@@ -1,0 +1,8 @@
+{
+  "name": "vop-tiger",
+  "private": true,
+  "type": "module",
+  "scripts": { "deploy": "wrangler deploy" },
+  "dependencies": { "pg": "8.13.1" },
+  "devDependencies": { "@cloudflare/workers-types": "4.20251113.0", "@types/pg": "8.11.10" }
+}
