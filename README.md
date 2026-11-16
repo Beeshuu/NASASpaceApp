@@ -5,6 +5,8 @@ light delay later, and every decision lands in a tamper-evident black box. Every
 
 Setup and the Auth0 + Cloudflare Access steps: [PROGRESS.md](Vital%20Orbit%20Pulse/docs/PROGRESS.md).
 
+### Hackathon Track Winner for Auth0
+
 ## Access The Website
 Link: https://guest.vitalorbit.health/guide
 
